@@ -1,0 +1,15 @@
+import { Router } from 'express';
+import bcrypt from 'bcryptjs';
+import { z } from 'zod';
+import { query } from '../db/pool.js';
+import { withTransaction } from '../db/tx.js';
+import { config } from '../config/index.js';
+import { requireAuth, signUser } from '../middleware/auth.js';
+import { validate } from '../middleware/validate.js';
+import { AppError } from '../middleware/errors.js';
+const schema=z.object({username:z.string().min(3),password:z.string().min(6),role:z.enum(['passenger','driver']),name:z.string().min(1),phone:z.string().optional(),vehicleType:z.enum(['AUTO','HATCHBACK','SEDAN','SUV']).optional(),vehicleNumber:z.string().optional()});
+const publicUser=u=>({id:u.id,username:u.username,role:u.role,name:u.name,phone:u.phone});
+export const authRouter=Router();
+authRouter.post('/register',validate(schema),async(req,res,next)=>{try{const b=req.body;if(b.role==='driver'&&!b.vehicleType)throw new AppError(400,'vehicleType is required for drivers','VALIDATION_ERROR');const user=await withTransaction(async c=>{const u=(await c.query('INSERT INTO users(username,password_hash,role,name,phone) VALUES($1,$2,$3,$4,$5) RETURNING id,username,role,name,phone',[b.username,await bcrypt.hash(b.password,10),b.role,b.name,b.phone||null])).rows[0];if(b.role==='driver')await c.query('INSERT INTO drivers(user_id,vehicle_type,vehicle_number,lat,lng) VALUES($1,$2,$3,$4,$5)',[u.id,b.vehicleType,b.vehicleNumber||null,config.CITY_CENTER_LAT,config.CITY_CENTER_LNG]);return u;});res.status(201).json({token:signUser(user),user:publicUser(user)});}catch(e){next(e.code==='23505'?new AppError(409,'Username already exists','USERNAME_TAKEN'):e);}});
+authRouter.post('/login',validate(z.object({username:z.string(),password:z.string()})),async(req,res,next)=>{try{const r=await query('SELECT id,username,password_hash,role,name,phone FROM users WHERE username=$1',[req.body.username]);if(!r.rowCount||!(await bcrypt.compare(req.body.password,r.rows[0].password_hash)))throw new AppError(401,'Invalid credentials','INVALID_CREDENTIALS');const u=r.rows[0];res.json({token:signUser(u),user:publicUser(u)});}catch(e){next(e);}});
+authRouter.get('/me',requireAuth,async(req,res,next)=>{try{let driver=null;if(req.user.role==='driver'){const r=await query('SELECT id,vehicle_type AS "vehicleType",vehicle_number AS "vehicleNumber",lat,lng,status,online_since AS "onlineSince",last_heartbeat AS "lastHeartbeat" FROM drivers WHERE user_id=$1',[req.user.id]);driver=r.rows[0]||null;}res.json({user:req.user,driver});}catch(e){next(e);}});

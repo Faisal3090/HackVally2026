@@ -1,0 +1,12 @@
+{
+  "name": "hackvally-ride-matching",
+  "private": true,
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "dev": "npm --prefix server run dev",
+    "migrate": "npm --prefix server run migrate",
+    "seed": "npm --prefix server run seed",
+    "worker": "npm --prefix server run worker",
+    "test": "npm --prefix server test"
+  }
+}

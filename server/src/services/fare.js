@@ -1,0 +1,3 @@
+import { config } from '../config/index.js';
+import { modifiers } from '../hooks/fareModifiers.js';
+export function calculateFare({distanceKm,vehicleType='HATCHBACK',zone=null}){const multiplier=config.FARE_VEHICLE_MULTIPLIER[vehicleType]??1;const base=config.FARE_BASE;const distanceFare=config.FARE_PER_KM*distanceKm;let total=(base+distanceFare)*multiplier;const breakdown=[{name:'base',amount:base},{name:'perKm',amount:distanceFare},{name:'vehicleMultiplier',value:multiplier}];for(const modifier of modifiers){const before=total;total=modifier(total,{distanceKm,vehicleType,zone});breakdown.push({name:modifier.name||'modifier',amount:total-before});}return{total:Math.round(total),breakdown};}

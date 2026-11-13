@@ -1,0 +1,7 @@
+import { config } from '../config/index.js';
+import { haversineKm, etaMinutes } from './geo.js';
+const cache=new Map(); const key=(a,b)=>[a.lat.toFixed(4),a.lng.toFixed(4),b.lat.toFixed(4),b.lng.toFixed(4)].join(',');
+async function request(url){const c=new AbortController();const t=setTimeout(()=>c.abort(),config.ROUTING_TIMEOUT_MS);try{const r=await fetch(url,{signal:c.signal});if(!r.ok)throw new Error(`routing ${r.status}`);return await r.json();}finally{clearTimeout(t);}}
+function fallback(from,to){const distanceKm=haversineKm(from,to)*1.3;return{distanceKm,durationMin:etaMinutes(distanceKm),geometry:{type:'LineString',coordinates:[[from.lng,from.lat],[to.lng,to.lat]]},source:'haversine'};}
+export async function getRoute(from,to){const k=key(from,to),old=cache.get(k);if(old&&old.expires>Date.now())return old.value;if(config.ROUTING_PROVIDER==='haversine')return fallback(from,to);try{const d=await request(`${config.OSRM_BASE_URL}/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`);const r=d.routes?.[0];if(!r)throw new Error('no route');const value={distanceKm:r.distance/1000,durationMin:r.duration/60,geometry:r.geometry,source:'osrm'};cache.set(k,{value,expires:Date.now()+60000});return value;}catch(e){console.warn('Routing fallback:',e.message);return fallback(from,to);}}
+export async function getEtaMatrix(drivers,pickup){const out={};await Promise.all(drivers.map(async d=>{const r=await getRoute({lat:d.lat,lng:d.lng},pickup);out[d.id]={distanceKm:r.distanceKm,etaMin:r.durationMin};}));return out;}

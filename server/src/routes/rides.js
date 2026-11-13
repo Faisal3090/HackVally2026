@@ -1,0 +1,18 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { requireAuth } from '../middleware/auth.js';
+import { requireRole } from '../middleware/roles.js';
+import { validate } from '../middleware/validate.js';
+import { getRoute } from '../services/routing.js';
+import { calculateFare } from '../services/fare.js';
+import { getZoneIntelligence } from '../services/zoneIntelligence.js';
+import { AppError } from '../middleware/errors.js';
+import { query } from '../db/pool.js';
+import { haversineKm } from '../services/geo.js';
+import { getEtaMatrix } from '../services/routing.js';
+import { config } from '../config/index.js';
+const points=z.object({lat:z.number().gte(-90).lte(90),lng:z.number().gte(-180).lte(180)}); const body=z.object({pickup:points,drop:points,vehicleType:z.enum(['AUTO','HATCHBACK','SEDAN','SUV']).optional()});
+export const ridesRouter=Router(); ridesRouter.use(requireAuth,requireRole('passenger'));
+ridesRouter.post('/estimate',validate(body),async(req,res,next)=>{try{const route=await getRoute(req.body.pickup,req.body.drop);const zone=await getZoneIntelligence(req.body.pickup.lat,req.body.pickup.lng);const fare=calculateFare({distanceKm:route.distanceKm,vehicleType:req.body.vehicleType,zone});const drivers=(await query("SELECT id,lat,lng FROM drivers WHERE status='AVAILABLE' AND lat IS NOT NULL AND lng IS NOT NULL")).rows.filter(d=>haversineKm({lat:d.lat,lng:d.lng},req.body.pickup)<=config.SEARCH_RADIUS_KM);const matrix=await getEtaMatrix(drivers,req.body.pickup);const etas=drivers.map(d=>matrix[d.id]?.etaMin).filter(Number.isFinite);res.json({tripDistanceKm:route.distanceKm,tripDurationMin:route.durationMin,estimatedFare:fare.total,fareBreakdown:fare.breakdown,nearestEtaMin:etas.length?Math.min(...etas):null,nearbyDriverCount:drivers.length,routeSource:route.source});}catch(e){next(e);}});
+ridesRouter.get('/history',async(req,res,next)=>{try{const r=await (await import('../db/pool.js')).query('SELECT id,status,pickup_label AS "pickupLabel",drop_label AS "dropLabel",trip_distance_km AS "tripDistanceKm",estimated_fare AS "estimatedFare",final_fare AS "finalFare",created_at AS "createdAt",completed_at AS "completedAt" FROM rides WHERE passenger_id=$1 ORDER BY created_at DESC',[req.user.id]);res.json(r.rows);}catch(e){next(e);}});
+ridesRouter.get('/:id/route',async(req,res,next)=>{try{const {query}=await import('../db/pool.js');const r=await query('SELECT pickup_lat,pickup_lng,drop_lat,drop_lng FROM rides WHERE id=$1 AND passenger_id=$2',[req.params.id,req.user.id]);if(!r.rowCount)throw new AppError(404,'Ride not found','NOT_FOUND');const x=r.rows[0],route=await getRoute({lat:x.pickup_lat,lng:x.pickup_lng},{lat:x.drop_lat,lng:x.drop_lng});res.json({pickupToDrop:route.geometry,source:route.source});}catch(e){next(e);}});
